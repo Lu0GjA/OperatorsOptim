@@ -67,6 +67,7 @@ class Matrix
         
         void mul(const Matrix&, const Matrix&);
         void mul_neon(const Matrix&, const Matrix&);
+        void mul_asm_blocking_4x4F32(const Matrix&, const Matrix&);
 };
 
 
@@ -217,6 +218,153 @@ void Matrix::mul_neon(const Matrix& a, const Matrix& bt)
 }
 
 
+/*
+ * This routine impl a 4x4 FP32 kernel, with matrix 1024x1024
+ */
+
+void Matrix::mul_asm_blocking_4x4F32(const Matrix& A, const Matrix& B)
+{
+/*
+    for (int outer_x = 0; outer_x < 256; outer_x++)
+        for (int outer_y = 0; outer_y < 256; outer_y++)
+            for (int k = 0; k < 256; k++)
+                for (int inner_x = 0; inner_x < 4; inner_x++)
+                    for (int inner_y = 0; inner_y < 4; inner_y++)
+                        for (int i = 0; i < 4; i++)
+                            data[(outer_x * 4 + inner_x) * y + (outer_y * 4 + inner_y)] += 
+                            A.data[(outer_x * 4 + inner_x) * A.y + (k * 4 + i)] *
+                            B.data[(k * 4 + i) * B.y + (outer_y * 4 + inner_y)];
+*/
+    asm volatile(
+            "mov x0, %[adata]\n"
+            "mov x1, %[bdata]\n"
+            "mov x2, %[cdata]\n"
+            "mov x28, #0\n"
+            "mov x29, #4\n"
+            "mov x30, #1024\n"
+
+// Outer loop x
+
+            "mov x3, #0\n"
+            "x44_outer_x:\n"
+
+// Outer loop y
+
+            "mov x4, #0\n"
+            "x44_outer_y:\n"
+
+// Clear target vector registers
+
+            "dup v0.4s, w28\n"
+            "dup v1.4s, w28\n"
+            "dup v2.4s, w28\n"
+            "dup v3.4s, w28\n"
+
+// Calculate offset for A
+
+            "mul x6, x3, x29\n"
+            "mul x6, x6, x30\n"
+            "mul x6, x6, x29\n"
+            "add x6, x6, x0\n"
+
+// Calculate offset for B
+
+            "mul x7, x4, x29\n"
+            "mul x7, x7, x29\n"
+            "add x7, x7, x1\n"
+
+// Inner loop K
+
+            "mov x5, #0\n"
+            "x44_k:\n"
+
+            "ldr q4, [x6]\n"
+            "ldr q5, [x6, #4096]\n"
+            "ldr q6, [x6, #8192]\n"
+            "ldr q7, [x6, #12288]\n"
+
+            "ldr q8, [x7]\n"
+            "ldr q9, [x7, #4096]\n"
+            "ldr q10, [x7, #8192]\n"
+            "ldr q11, [x7, #12288]\n"
+
+            // ldr Q-form registers cost 6 Cycles     L
+            // fmul Q-form registers cost 4 Cycles    F0/F1
+            // fmla Q-form registers cost 7-3 Cycles  F0/F1
+            // fadd Q-form registers cost 4 Cycles    F0/F1
+            // L F0 F1, can parallelize
+            //
+// First dot 
+
+            "fmul v12.4s, v8.4s, v4.4s[0]\n"
+            "fmul v13.4s, v8.4s, v5.4s[0]\n"
+            "fmul v14.4s, v8.4s, v6.4s[0]\n"
+            "fmul v15.4s, v8.4s, v7.4s[0]\n"
+
+// Second dot
+
+            "fmla v12.4s, v9.4s, v4.4s[1]\n"
+            "fmla v13.4s, v9.4s, v5.4s[1]\n"
+            "fmla v14.4s, v9.4s, v6.4s[1]\n"
+            "fmla v15.4s, v9.4s, v7.4s[1]\n"
+
+// Third dot
+
+            "fmla v12.4s, v10.4s, v4.4s[2]\n"
+            "fmla v13.4s, v10.4s, v5.4s[2]\n"
+            "fmla v14.4s, v10.4s, v6.4s[2]\n"
+            "fmla v15.4s, v10.4s, v7.4s[2]\n"
+
+// Firth dot
+
+            "fmla v12.4s, v11.4s, v4.4s[3]\n"
+            "fmla v13.4s, v11.4s, v5.4s[3]\n"
+            "fmla v14.4s, v11.4s, v6.4s[3]\n"
+            "fmla v15.4s, v11.4s, v7.4s[3]\n"
+
+// Add to target vector register
+
+            "fadd v0.4s, v0.4s, v12.4s\n"
+            "fadd v1.4s, v1.4s, v13.4s\n"
+            "fadd v2.4s, v2.4s, v14.4s\n"
+            "fadd v3.4s, v3.4s, v15.4s\n"
+
+            "add x6, x6, #16\n"
+            "add x7, x7, #16384\n"
+
+            "add x5, x5, #1\n"
+            "cmp x5, #256\n"
+            "bne x44_k\n"
+
+// Inner loop complete, write block results to memory
+
+            "mul x6, x3, x29\n"
+            "mul x6, x6, x30\n"
+            "mul x7, x4, x29\n"
+            "add x6, x6, x7\n"
+            "mul x6, x6, x29\n"
+            "add x6, x6, x2\n"
+
+            "str q0, [x6]\n"
+            "str q1, [x6, #4096]\n"
+            "str q2, [x6, #8192]\n"
+            "str q3, [x6, #12288]\n"
+
+            "add x4, x4, #1\n"
+            "cmp x4, #256\n"
+            "bne x44_outer_y\n"
+
+            "add x3, x3, #1\n"
+            "cmp x3, #256\n"
+            "bne x44_outer_x\n"
+
+            :
+            :[adata]"r"(A.data), [bdata]"r"(B.data), [cdata]"r"(data)
+            :"x0", "x1", "x2", "x3", "x4", "x5", "x6", "x7", "x28", "x29", "x30"
+            );
+}
+
+
 int main(int argc, char** argv)
 {
     Matrix matA(1024, 1024);
@@ -233,6 +381,13 @@ int main(int argc, char** argv)
     matA.random();
     matB.random();
 
+    matC.clear();
+    timer.start();
+    matC.mul_asm_blocking_4x4F32(matA, matB);
+    timer.end();
+    timer.show_gap();
+    printf("\n%f\n", matC.data[debug_index]);
+
     matB.transpose();
     matC.clear();
     timer.start();
@@ -240,6 +395,7 @@ int main(int argc, char** argv)
     timer.end();
     timer.show_gap();
     printf("\n%f\n", matC.data[debug_index]);
+
 
     return 0;
 }
