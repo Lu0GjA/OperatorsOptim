@@ -274,9 +274,7 @@ void Matrix::mul_asm_blocking_4x4F32(const Matrix& A, const Matrix& B)
             "add x7, x7, x1\n"
 
 // Inner loop K
-
-            "mov x5, #0\n"
-            "x44_k:\n"
+// Pre-load data for K = 0
 
             "ldr q4, [x6]\n"
             "ldr q5, [x6, #4096]\n"
@@ -288,6 +286,19 @@ void Matrix::mul_asm_blocking_4x4F32(const Matrix& A, const Matrix& B)
             "ldr q10, [x7, #8192]\n"
             "ldr q11, [x7, #12288]\n"
 
+            "mov x5, #0\n"
+            "x44_k:\n"
+/*
+            "ldr q4, [x6]\n"
+            "ldr q5, [x6, #4096]\n"
+            "ldr q6, [x6, #8192]\n"
+            "ldr q7, [x6, #12288]\n"
+
+            "ldr q8, [x7]\n"
+            "ldr q9, [x7, #4096]\n"
+            "ldr q10, [x7, #8192]\n"
+            "ldr q11, [x7, #12288]\n"
+*/
             // ldr Q-form registers cost 6 Cycles     L
             // fmul Q-form registers cost 4 Cycles    F0/F1
             // fmla Q-form registers cost 7-3 Cycles  F0/F1
@@ -300,10 +311,13 @@ void Matrix::mul_asm_blocking_4x4F32(const Matrix& A, const Matrix& B)
             "fmul v13.4s, v8.4s, v5.4s[0]\n"
             "fmul v14.4s, v8.4s, v6.4s[0]\n"
             "fmul v15.4s, v8.4s, v7.4s[0]\n"
+            "add x7, x7, #16384\n"
+            "add x6, x6, #16\n"
 
 // Second dot
 
             "fmla v12.4s, v9.4s, v4.4s[1]\n"
+            "ldr q8, [x7]\n"
             "fmla v13.4s, v9.4s, v5.4s[1]\n"
             "fmla v14.4s, v9.4s, v6.4s[1]\n"
             "fmla v15.4s, v9.4s, v7.4s[1]\n"
@@ -311,6 +325,7 @@ void Matrix::mul_asm_blocking_4x4F32(const Matrix& A, const Matrix& B)
 // Third dot
 
             "fmla v12.4s, v10.4s, v4.4s[2]\n"
+            "ldr q9, [x7, #4096]\n"
             "fmla v13.4s, v10.4s, v5.4s[2]\n"
             "fmla v14.4s, v10.4s, v6.4s[2]\n"
             "fmla v15.4s, v10.4s, v7.4s[2]\n"
@@ -318,19 +333,25 @@ void Matrix::mul_asm_blocking_4x4F32(const Matrix& A, const Matrix& B)
 // Firth dot
 
             "fmla v12.4s, v11.4s, v4.4s[3]\n"
+            "ldr q10, [x7, #8192]\n"
             "fmla v13.4s, v11.4s, v5.4s[3]\n"
+            "ldr q4, [x6]\n"
             "fmla v14.4s, v11.4s, v6.4s[3]\n"
+            "ldr q5, [x6, #4096]\n"
             "fmla v15.4s, v11.4s, v7.4s[3]\n"
+            "ldr q6, [x6, #8192]\n"
 
 // Add to target vector register
 
             "fadd v0.4s, v0.4s, v12.4s\n"
             "fadd v1.4s, v1.4s, v13.4s\n"
+            "ldr q7, [x6, #12288]\n"
             "fadd v2.4s, v2.4s, v14.4s\n"
             "fadd v3.4s, v3.4s, v15.4s\n"
+            "ldr q11, [x7, #12288]\n"
 
-            "add x6, x6, #16\n"
-            "add x7, x7, #16384\n"
+            //"add x6, x6, #16\n"
+            //"add x7, x7, #16384\n"
 
             "add x5, x5, #1\n"
             "cmp x5, #256\n"
