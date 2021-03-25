@@ -68,6 +68,7 @@ class Matrix
         void mul(const Matrix&, const Matrix&);
         void mul_neon(const Matrix&, const Matrix&);
         void mul_asm_blocking_4x4F32(const Matrix&, const Matrix&);
+        void mul_asm_blocking_16x16F32(const Matrix&, const Matrix&);
 };
 
 
@@ -217,6 +218,180 @@ void Matrix::mul_neon(const Matrix& a, const Matrix& bt)
         }
 }
 
+
+/*
+ * This routine impl a 16x16FP32 kernel, with matrix 1024x1024
+ */
+void Matrix::mul_asm_blocking_16x16F32(const Matrix& A, const Matrix& B)
+{
+/*
+    for (int outer_x = 0; outer_x < 64; outer_x++)
+        for (int outer_y = 0; outer_y < 64; outer_y++)
+            for (int k = 0; k < 64; k++)
+                for (int inner_x = 0; inner_x < 16; inner_x++)
+                    for (int inner_y = 0; inner_y < 16; inner_y++)
+                        for (int i = 0; i < 16; i++)
+                            data[(outer_x * 16 + inner_x) * y + (outer_y * 16 + inner_y)] +=
+                            A.data[(outer_x * 16 + inner_x) * A.y + (k * 16 + i)] *
+                            B.data[(k * 16 + i) * B.y + (outer_y * 16 + inner_y)];
+*/
+    asm volatile(
+            "mov x0, %[adata]\n"
+            "mov x1, %[bdata]\n"
+            "mov x2, %[cdata]\n"
+            "mov x30, #16\n"
+            "mov x29, #1024\n"
+            "mov x28, #4\n"
+            "mov x27, #0\n"
+
+// Outer loop x
+
+            "mov x3, #0\n"
+            "x1616_outer_x:\n"
+
+// Outer loop y
+
+            "mov x4, #0\n"
+            "x1616_outer_y:\n"
+
+// Calc offset for A
+
+            "mul x6, x3, x30\n"
+            "mul x6, x6, x29\n"
+            "mul x6, x6, x28\n"
+            "add x6, x6, x0\n"
+
+// Calc offset for B
+
+            "mul x7, x4, x30\n"
+            "mul x7, x7, x28\n"
+            "add x7, x7, x1\n"
+
+// Calc offset for C
+
+            "mul x8, x3, x30\n"
+            "mul x8, x8, x29\n"
+            "mul x9, x4, x30\n"
+            "add x8, x8, x9\n"
+            "mul x8, x8, x28\n"
+            "add x8, x8, x2\n"
+
+// Inner loop k
+
+            "mov x5, #0\n"
+            "x1616_k:\n"
+
+// Calc a 16x16 temp block
+
+            "mov x10, #0\n"
+            "x1616_inner_y:\n"
+
+            "dup v9.4s, w27\n"
+            "dup v10.4s, w27\n"
+            "dup v11.4s, w27\n"
+            "dup v12.4s, w27\n"
+
+// Calc a 1x16 line in temp block
+// Pre-load data for x9 = 0
+
+            "ldr q0, [x6]\n"
+
+            "ld1 {v1.4s, v2.4s, v3.4s, v4.4s}, [x7]\n"
+            "mov x11, x7\n"
+            "add x11, x11, #4096\n"
+            "ld1 {v13.4s, v14.4s, v15.4s, v16.4s}, [x11]\n"
+            "mov x12, x11\n"
+            "add x12, x12, #4096\n"
+            "ld1 {v17.4s, v18.4s, v19.4s, v20.4s}, [x12]\n"
+            "mov x13, x12\n"
+            "add x13, x13, #4096\n"
+            "ld1 {v21.4s, v22.4s, v23.4s, v24.4s}, [x13]\n"
+
+            "mov x9, #0\n"
+            "x1616_inner_x_unroll_by4:\n"
+
+            "add x7, x7, #16384\n"
+            "fmul v5.4s, v1.4s, v0.4s[0]\n"
+            "fmul v6.4s, v2.4s, v0.4s[0]\n"
+            "fmul v7.4s, v3.4s, v0.4s[0]\n"
+            "fmul v8.4s, v4.4s, v0.4s[0]\n"
+
+            "add x11, x11, #16384\n"
+            "fmla v5.4s, v13.4s, v0.4s[1]\n"
+            "ld1 {v1.4s, v2.4s, v3.4s, v4.4s}, [x7]\n"
+            "fmla v6.4s, v14.4s, v0.4s[1]\n"
+            "fmla v7.4s, v15.4s, v0.4s[1]\n"
+            "fmla v8.4s, v16.4s, v0.4s[1]\n"
+
+            "add x12, x12, #16384\n"
+            "fmla v5.4s, v17.4s, v0.4s[2]\n"
+            "ld1 {v13.4s, v14.4s, v15.4s, v16.4s}, [x11]\n"
+            "fmla v6.4s, v18.4s, v0.4s[2]\n"
+            "fmla v7.4s, v19.4s, v0.4s[2]\n"
+            "fmla v8.4s, v20.4s, v0.4s[2]\n"
+
+            "add x13, x13, #16384\n"
+            "fmla v5.4s, v21.4s, v0.4s[3]\n"
+            "ld1 {v17.4s, v18.4s, v19.4s, v20.4s}, [x12]\n"
+            "fmla v6.4s, v22.4s, v0.4s[3]\n"
+            "fmla v7.4s, v23.4s, v0.4s[3]\n"
+            "fmla v8.4s, v24.4s, v0.4s[3]\n"
+
+            "fadd v9.4s, v9.4s, v5.4s\n"
+            "fadd v10.4s, v10.4s, v6.4s\n"
+            "add x6, x6, #16\n"
+            "ldr q0, [x6]\n"
+            "ld1 {v21.4s, v22.4s, v23.4s, v24.4s}, [x13]\n"
+            "fadd v11.4s, v11.4s, v7.4s\n"
+            "fadd v12.4s, v12.4s, v8.4s\n"
+
+            "add x9, x9, #1\n"
+            "cmp x9, #4\n"
+            "bne x1616_inner_x_unroll_by4\n"
+
+// Add inner loop line to mem
+// ld1 Q-form 4 registers cost 8 Cycles
+// st1 Q-form 4 registers cost 8 Cycles
+// add sub cost 1 Cycles
+
+            "ld1 {v13.4s, v14.4s, v15.4s, v16.4s}, [x8]\n"
+            "fadd v13.4s, v13.4s, v9.4s\n"
+            "fadd v14.4s, v14.4s, v10.4s\n"
+            "fadd v15.4s, v15.4s, v11.4s\n"
+            "fadd v16.4s, v16.4s, v12.4s\n"
+            "st1 {v13.4s, v14.4s, v15.4s, v16.4s}, [x8]\n"
+
+            "add x6, x6, #4032\n"
+            "sub x7, x7, #65536\n"
+            "add x8, x8, #4096\n"
+
+            "add x10, x10, #1\n"
+            "cmp x10, #16\n"
+            "bne x1616_inner_y\n"
+
+            "sub x8, x8, #65536\n"
+            "sub x6, x6, #65536\n"
+            "add x6, x6, #64\n"
+            "add x7, x7, #65536\n"
+
+            "add x5, x5, #1\n"
+            "cmp x5, #64\n"
+            "bne x1616_k\n"
+
+            "add x4, x4, #1\n"
+            "cmp x4, #64\n"
+            "bne x1616_outer_y\n"
+
+            "add x3, x3, #1\n"
+            "cmp x3, #64\n"
+            "bne x1616_outer_x\n"
+
+            :
+            :[adata]"r"(A.data), [bdata]"r"(B.data), [cdata]"r"(data)
+            :"x0", "x1", "x2", "x3", "x4", "x5", "x6", "x7", "x8", "x9", "x10", "x11", "x12", "x13", "x27", "x28", "x29", "x30"
+            );
+
+}
 
 /*
  * This routine impl a 4x4 FP32 kernel, with matrix 1024x1024
@@ -404,7 +579,7 @@ int main(int argc, char** argv)
 
     matC.clear();
     timer.start();
-    matC.mul_asm_blocking_4x4F32(matA, matB);
+    matC.mul_asm_blocking_16x16F32(matA, matB);
     timer.end();
     timer.show_gap();
     printf("\n%f\n", matC.data[debug_index]);
